@@ -1,0 +1,13 @@
+provider_category,total_claims,fraud_rate,avg_claim_amount,high_amount_flag_rate
+Cardiologist,3967,0.0832,128.64,0.0373
+Dentist,4064,0.0834,133.92,0.0369
+Dermatologist,3918,0.0791,127.2,0.0355
+GP,4486,0.0782,131.17,0.0348
+Hospital,4483,0.079,129.96,0.0375
+Oncologist,3914,0.0861,129.93,0.034
+Optometrist,3875,0.0831,131.73,0.0382
+Pharmacy,4513,0.0787,129.42,0.0361
+Physiotherapist,4099,0.08,131.51,0.0354
+Psychiatrist,4005,0.0779,132.07,0.039
+Radiologist,4038,0.0807,135.18,0.0347
+Specialist,4638,0.0724,127.34,0.0328

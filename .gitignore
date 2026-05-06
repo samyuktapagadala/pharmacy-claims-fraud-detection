@@ -1,6 +1,5 @@
-﻿data/raw/
+﻿outputs/charts/data/raw/
 data/processed/
-outputs/charts/
 outputs/*.pkl
 __pycache__/
 *.pyc

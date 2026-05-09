@@ -1,98 +1,123 @@
-"""Evaluate the fraud scoring model with classification metrics and plots."""
+"""Evaluate the saved fraud model on the holdout split and emit PNG artefacts.
+
+Loads outputs/fraud_model.pkl and data/processed/scored_claims.csv, recreates the
+exact same 80/20 stratified split used in fraud_model.py (random_state=42), then
+saves confusion_matrix.png, roc_curve.png, and classification_report.csv to
+outputs/charts/.
+"""
 
 import argparse
+import pickle
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 from sklearn import metrics
-
-sns.set_theme(style="whitegrid", palette=["#2C7BB6", "#92C5DE", "#D7191C"])
-
-
-def load_predictions(predictions_path: Path) -> pd.DataFrame:
-    """Load model predictions and ground-truth labels."""
-    return pd.read_csv(predictions_path)
+from sklearn.model_selection import train_test_split
 
 
-def evaluate(predictions: pd.DataFrame, output_dir: Path) -> dict:
-    """Compute metrics and save evaluation visuals."""
+def load_artefacts(model_path: Path, data_path: Path):
+    with open(model_path, "rb") as f:
+        bundle = pickle.load(f)
+    df = pd.read_csv(data_path)
+    return bundle, df
+
+
+def evaluate(bundle: dict, df: pd.DataFrame, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    y_true = predictions["is_flagged"]
-    y_pred = predictions["flagged_high_risk"]
-    y_score = predictions["risk_score"] / 100
+    features = bundle["features"]
+    model    = bundle["model"]
+    scaler   = bundle["scaler"]
 
-    precision = metrics.precision_score(y_true, y_pred, zero_division=0)
-    recall = metrics.recall_score(y_true, y_pred, zero_division=0)
-    f1 = metrics.f1_score(y_true, y_pred, zero_division=0)
+    X = df[features].fillna(0)
+    y = df["is_fraud_ground_truth"]
 
-    cm = metrics.confusion_matrix(y_true, y_pred)
+    _, X_test, _, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    X_test_s = scaler.transform(X_test)
+
+    y_pred  = model.predict(X_test_s)
+    y_proba = model.predict_proba(X_test_s)[:, 1]
+
+    precision = metrics.precision_score(y_test, y_pred, zero_division=0)
+    recall    = metrics.recall_score(y_test, y_pred, zero_division=0)
+    f1        = metrics.f1_score(y_test, y_pred, zero_division=0)
+    roc_auc   = metrics.roc_auc_score(y_test, y_proba)
+
+    cm = metrics.confusion_matrix(y_test, y_pred)
     cm_df = pd.DataFrame(
         cm,
-        index=["Actual Negative", "Actual Positive"],
-        columns=["Predicted Negative", "Predicted Positive"],
+        index=["Actual Legit", "Actual Fraud"],
+        columns=["Predicted Legit", "Predicted Fraud"],
     )
-    cm_path = output_dir / "confusion_matrix.csv"
-    cm_df.to_csv(cm_path)
+    cm_df.to_csv(output_dir / "confusion_matrix.csv")
 
     fig, ax = plt.subplots(figsize=(8, 6))
-    sns.heatmap(cm_df, annot=True, fmt="d", cmap="Blues", ax=ax)
-    ax.set_title("Confusion Matrix")
-    save_path = output_dir / "confusion_matrix.png"
-    fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    fig.patch.set_facecolor("#F8F9FA")
+    sns.heatmap(cm_df, annot=True, fmt="d", cmap="Blues", ax=ax,
+                cbar=True, linewidths=0.5, linecolor="white")
+    ax.set_title("Confusion Matrix — Fraud Classifier (holdout)",
+                 fontsize=13, fontweight="bold", pad=12)
+    fig.savefig(output_dir / "confusion_matrix.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
-    fpr, tpr, _ = metrics.roc_curve(y_true, y_score)
-    roc_auc = metrics.auc(fpr, tpr)
+    fpr, tpr, _ = metrics.roc_curve(y_test, y_proba)
     fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot(fpr, tpr, color="#2C7BB6", label=f"ROC AUC = {roc_auc:.3f}")
-    ax.plot([0, 1], [0, 1], color="#999999", linestyle="--")
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curve")
-    ax.legend(loc="lower right")
+    fig.patch.set_facecolor("#F8F9FA")
+    ax.set_facecolor("#F8F9FA")
+    ax.plot(fpr, tpr, color="#2C7BB6", linewidth=2.5,
+            label=f"ROC AUC = {roc_auc:.3f}")
+    ax.fill_between(fpr, tpr, alpha=0.15, color="#2C7BB6")
+    ax.plot([0, 1], [0, 1], color="#999999", linestyle="--", linewidth=1.5,
+            label="Random classifier")
+    ax.set_xlabel("False Positive Rate", fontsize=11)
+    ax.set_ylabel("True Positive Rate", fontsize=11)
+    ax.set_title("ROC Curve — Fraud Classifier (holdout)",
+                 fontsize=13, fontweight="bold", pad=12)
+    ax.legend(loc="lower right", fontsize=10)
+    ax.grid(True, alpha=0.3)
     fig.savefig(output_dir / "roc_curve.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
-    report = metrics.classification_report(y_true, y_pred, zero_division=0, output_dict=True)
-    report_df = pd.DataFrame(report).transpose()
-    report_path = output_dir / "classification_report.csv"
-    report_df.to_csv(report_path)
+    report = metrics.classification_report(
+        y_test, y_pred, zero_division=0, output_dict=True,
+        target_names=["Legit", "Fraud"],
+    )
+    pd.DataFrame(report).transpose().to_csv(output_dir / "classification_report.csv")
 
     return {
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "roc_auc": roc_auc,
+        "precision_fraud": float(precision),
+        "recall_fraud":    float(recall),
+        "f1_fraud":        float(f1),
+        "roc_auc":         float(roc_auc),
+        "n_test":          int(len(y_test)),
+        "n_fraud_test":    int(y_test.sum()),
     }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate the pharmacy fraud risk model.")
-    parser.add_argument(
-        "--input-file",
-        type=Path,
-        default=Path("../outputs/flagged_claims.csv"),
-        help="Path to flagged claims output.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("../outputs/charts"),
-        help="Directory to save evaluation charts.",
-    )
+    parser.add_argument("--model-file",  type=Path, default=Path("outputs/fraud_model.pkl"))
+    parser.add_argument("--data-file",   type=Path, default=Path("data/processed/scored_claims.csv"))
+    parser.add_argument("--output-dir",  type=Path, default=Path("outputs/charts"))
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    predictions = load_predictions(args.input_file)
-    metrics_summary = evaluate(predictions, args.output_dir)
-    print("Evaluation metrics:")
-    for name, value in metrics_summary.items():
-        print(f"{name}: {value:.4f}")
+    bundle, df = load_artefacts(args.model_file, args.data_file)
+    summary = evaluate(bundle, df, args.output_dir)
+    print("Holdout evaluation summary:")
+    for name, value in summary.items():
+        if isinstance(value, float):
+            print(f"  {name:<18} {value:.4f}")
+        else:
+            print(f"  {name:<18} {value}")
+    print(f"\nArtefacts saved to {args.output_dir}/")
 
 
 if __name__ == "__main__":
